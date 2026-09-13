@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,6 +61,9 @@ func TestRepositoryBranchAndCommitOperations(t *testing.T) {
 		if branch.Name == "feature/login" && !branch.IsRemote() {
 			foundLocal = true
 		}
+		if branch.Name == "main" && !branch.IsRemote() && !branch.IsCurrent {
+			t.Fatalf("local main branch is not marked current: %#v", branch)
+		}
 		if branch.Name == "remote-only" && branch.Remote == "origin" {
 			foundRemote = true
 			if branch.Ref != "origin/remote-only" {
@@ -106,6 +108,93 @@ func TestRepositoryBranchAndCommitOperations(t *testing.T) {
 	}
 }
 
+func TestSwitchesLocalJapaneseSlashBranchWhenPathCollides(t *testing.T) {
+	dir := newRepository(t)
+	writeFile(t, dir, "README.md", "first\n")
+	runGit(t, dir, "add", "--", "README.md")
+	runGit(t, dir, "commit", "-qm", "first commit")
+	branchName := "feature/日本語"
+	runGit(t, dir, "branch", branchName)
+	if err := os.Mkdir(filepath.Join(dir, "feature"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, filepath.Join("feature", "日本語"), "path with the same name\n")
+
+	client := NewInDir(dir, "")
+	branches, err := client.ListBranches(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var branch Branch
+	for _, candidate := range branches {
+		if candidate.Name == branchName && !candidate.IsRemote() {
+			branch = candidate
+			break
+		}
+	}
+	if branch.Ref == "" {
+		t.Fatalf("local branch %q was not listed: %#v", branchName, branches)
+	}
+	preview, err := client.BranchLog(context.Background(), branch.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(preview.Stdout), "first commit") {
+		t.Fatalf("branch preview = %q", preview.Stdout)
+	}
+	if _, err := client.Switch(context.Background(), branch); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(runGit(t, dir, "branch", "--show-current"))); got != branchName {
+		t.Fatalf("current branch = %q, want %q", got, branchName)
+	}
+}
+
+func TestSwitchRemoteBranchUsesSelectedRemoteWhenNamesCollide(t *testing.T) {
+	dir := newRepository(t)
+	writeFile(t, dir, "README.md", "first\n")
+	runGit(t, dir, "add", "--", "README.md")
+	runGit(t, dir, "commit", "-qm", "first commit")
+	origin := newBareRepository(t)
+	upstream := newBareRepository(t)
+	runGit(t, dir, "remote", "add", "origin", origin)
+	runGit(t, dir, "remote", "add", "upstream", upstream)
+	for _, remote := range []string{"origin", "upstream"} {
+		runGit(t, dir, "push", "-q", remote, "HEAD:refs/heads/feature/shared")
+		runGit(t, dir, "fetch", "-q", remote, "feature/shared")
+	}
+
+	client := NewInDir(dir, "")
+	branches, err := client.ListBranches(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected Branch
+	var matching int
+	for _, branch := range branches {
+		if branch.Name != "feature/shared" || !branch.IsRemote() {
+			continue
+		}
+		matching++
+		if branch.Remote == "upstream" {
+			selected = branch
+		}
+	}
+	if matching != 2 || selected.Ref != "upstream/feature/shared" {
+		t.Fatalf("same-name remote branches = %#v, selected = %#v", branches, selected)
+	}
+	if _, err := client.Switch(context.Background(), selected); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(runGit(t, dir, "branch", "--show-current"))); got != "feature/shared" {
+		t.Fatalf("current branch = %q, want feature/shared", got)
+	}
+	upstreamRef := strings.TrimSpace(string(runGit(t, dir, "for-each-ref", "--format=%(upstream:short)", "refs/heads/feature/shared")))
+	if upstreamRef != "upstream/feature/shared" {
+		t.Fatalf("upstream = %q, want upstream/feature/shared", upstreamRef)
+	}
+}
+
 func TestEmptyRepositoryHasNoBranchesOrCommits(t *testing.T) {
 	dir := newRepository(t)
 	client := NewInDir(dir, "")
@@ -142,6 +231,13 @@ func newRepository(t *testing.T) string {
 	return dir
 }
 
+func newBareRepository(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "--bare", "-q")
+	return dir
+}
+
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -155,11 +251,12 @@ func runGit(t *testing.T, dir string, args ...string) []byte {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	var output bytes.Buffer
+	var stderr bytes.Buffer
 	cmd.Stdout = &output
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, output.String())
+		t.Fatalf("git %v: %v\nstdout=%q\nstderr=%q", args, err, output.String(), stderr.String())
 	}
 	return output.Bytes()
 }

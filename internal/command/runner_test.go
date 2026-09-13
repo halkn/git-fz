@@ -302,6 +302,89 @@ func TestRunRenamePreviewAndStageUseDestination(t *testing.T) {
 	}
 }
 
+func TestRunDeletedFilePreviewStageAndUnstagePreserveOtherStagedChanges(t *testing.T) {
+	dir := newCommandRepository(t)
+	deletedPath := "deleted 日本.txt"
+	stagedPath := "keep staged.txt"
+	writeCommandFile(t, dir, deletedPath, "content that will be deleted\n")
+	writeCommandFile(t, dir, stagedPath, "before\n")
+	runCommandGit(t, dir, "add", "--", deletedPath, stagedPath)
+	runCommandGit(t, dir, "commit", "-qm", "add files")
+	if err := os.Remove(filepath.Join(dir, deletedPath)); err != nil {
+		t.Fatal(err)
+	}
+	writeCommandFile(t, dir, stagedPath, "before\na staged change\n")
+	runCommandGit(t, dir, "add", "--", stagedPath)
+
+	client := git.NewInDir(dir, "")
+	changes, err := client.ListChanges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deleted git.Change
+	for _, change := range changes {
+		if change.Path == deletedPath {
+			deleted = change
+			break
+		}
+	}
+	if deleted.Path == "" || deleted.Status() != " D" {
+		t.Fatalf("deleted change = %#v, want unstaged deletion", deleted)
+	}
+
+	payload, err := marshal(deleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(client, &fakePicker{}, "/tmp/git-fz")
+	var preview bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"__preview", "change", fzf.EncodePayload(payload)}, &preview, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(preview.String(), "content that will be deleted") {
+		t.Fatalf("deleted preview = %q", preview.String())
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"__stage-action", "stage", fzf.EncodePayload(payload)}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if status := string(runCommandGit(t, dir, "status", "--porcelain=v1", "-z")); !strings.Contains(status, "D  "+deletedPath) || !strings.Contains(status, "M  "+stagedPath) {
+		t.Fatalf("status after staging deletion = %q", status)
+	}
+	stagedDeleted := deleted
+	stagedDeleted.IndexStatus = 'D'
+	stagedDeleted.WorktreeStatus = ' '
+	preview.Reset()
+	if err := runner.Run(context.Background(), []string{"__preview", "change", fzf.EncodePayload(payloadForChange(t, stagedDeleted))}, &preview, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(preview.String(), "content that will be deleted") {
+		t.Fatalf("staged deleted preview = %q", preview.String())
+	}
+
+	stdout.Reset()
+	if err := runner.Run(context.Background(), []string{"__stage-action", "unstage", fzf.EncodePayload(payloadForChange(t, stagedDeleted))}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	status := string(runCommandGit(t, dir, "status", "--porcelain=v1", "-z"))
+	if !strings.Contains(status, " D "+deletedPath) || !strings.Contains(status, "M  "+stagedPath) {
+		t.Fatalf("status after unstaging deletion = %q", status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, deletedPath)); !os.IsNotExist(err) {
+		t.Fatalf("deleted file was restored after unstage: %v", err)
+	}
+}
+
+func payloadForChange(t *testing.T, change git.Change) string {
+	t.Helper()
+	payload, err := marshal(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
 func TestRunStageActionTransformReportsFailureAndAllowsRetry(t *testing.T) {
 	dir := newCommandRepository(t)
 	path := "locked file.txt"
