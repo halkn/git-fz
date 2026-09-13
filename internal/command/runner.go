@@ -169,12 +169,12 @@ func (r *Runner) runStage(ctx context.Context, stdout, stderr io.Writer) error {
 	source := fzf.ShellQuote(r.Executable) + " __stage-source"
 	selected, err := r.Picker.Select(ctx, items, fzf.Options{
 		Prompt:  "Stage> ",
-		Header:  "TAB select  ctrl-s stage  ctrl-u unstage  ENTER finish  ESC cancel",
+		Header:  stageHeader,
 		Multi:   true,
 		Preview: fzf.ShellQuote(r.Executable) + " __preview change {1}",
 		Bind: []string{
-			"ctrl-s:execute-silent(" + action + " stage {+1})+reload(" + source + ")",
-			"ctrl-u:execute-silent(" + action + " unstage {+1})+reload(" + source + ")",
+			"ctrl-s:transform(" + action + " --transform stage {+1})+reload-sync(" + source + ")",
+			"ctrl-u:transform(" + action + " --transform unstage {+1})+reload-sync(" + source + ")",
 		},
 	})
 	if err != nil {
@@ -201,9 +201,13 @@ func changeItems(changes []git.Change) ([]fzf.Item, error) {
 		if err != nil {
 			return nil, err
 		}
+		display := fmt.Sprintf("%s %s", change.Status(), change.Path)
+		if change.OriginalPath != "" {
+			display = fmt.Sprintf("%s %s -> %s", change.Status(), change.OriginalPath, change.Path)
+		}
 		items = append(items, fzf.Item{
 			Payload: payload,
-			Display: fmt.Sprintf("%s %s", change.Status(), change.Path),
+			Display: display,
 		})
 	}
 	return items, nil
@@ -251,7 +255,7 @@ func (r *Runner) runPreview(ctx context.Context, args []string, stdout io.Writer
 
 func (r *Runner) writeChangePreview(ctx context.Context, change git.Change, stdout io.Writer) error {
 	if change.CanUnstage() {
-		result, err := r.Git.Diff(ctx, change.Path, true)
+		result, err := r.Git.DiffPaths(ctx, change.UnstagePaths(), true)
 		if err != nil {
 			_, _ = io.WriteString(stdout, err.Error()+"\n")
 		} else if _, err := stdout.Write(result.Stdout); err != nil {
@@ -301,38 +305,38 @@ func (r *Runner) runStageSource(ctx context.Context, stdout io.Writer) error {
 }
 
 func (r *Runner) runStageAction(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	transform := len(args) > 0 && args[0] == "--transform"
+	if transform {
+		args = args[1:]
+	}
 	if len(args) < 2 || (args[0] != "stage" && args[0] != "unstage") {
-		return errors.New("usage: git-fz __stage-action <stage|unstage> <payload>...")
+		return r.stageActionFailure(stdout, transform, errors.New("usage: git-fz __stage-action <stage|unstage> <payload>..."))
 	}
 	changes := make([]git.Change, 0, len(args)-1)
-	seen := make(map[string]struct{}, len(args)-1)
+	seenPaths := make(map[string]struct{}, len(args)-1)
 	for _, token := range args[1:] {
 		payload, err := fzf.DecodePayload(token)
 		if err != nil {
-			return err
+			return r.stageActionFailure(stdout, transform, err)
 		}
 		var change git.Change
 		if err := json.Unmarshal([]byte(payload), &change); err != nil {
-			return fmt.Errorf("decode selected change: %w", err)
+			return r.stageActionFailure(stdout, transform, fmt.Errorf("decode selected change: %w", err))
 		}
-		if _, ok := seen[change.Path]; ok {
-			continue
-		}
-		seen[change.Path] = struct{}{}
 		if args[0] == "stage" && change.CanStage() {
-			changes = append(changes, change)
+			changes = appendUniquePaths(changes, change, change.StagePaths(), seenPaths)
 		}
 		if args[0] == "unstage" && change.CanUnstage() {
-			changes = append(changes, change)
+			changes = appendUniquePaths(changes, change, change.UnstagePaths(), seenPaths)
 		}
 	}
 	if len(changes) == 0 {
+		if transform {
+			return writeStageHeader(stdout, "")
+		}
 		return nil
 	}
-	paths := make([]string, 0, len(changes))
-	for _, change := range changes {
-		paths = append(paths, change.Path)
-	}
+	paths := collectPaths(changes, args[0] == "stage")
 	var result git.Result
 	var err error
 	if args[0] == "stage" {
@@ -341,9 +345,65 @@ func (r *Runner) runStageAction(ctx context.Context, args []string, stdout, stde
 		result, err = r.Git.Unstage(ctx, paths...)
 	}
 	if err != nil {
-		return err
+		return r.stageActionFailure(stdout, transform, err)
+	}
+	if transform {
+		return writeStageHeader(stdout, "")
 	}
 	return writeResult(result, stdout, stderr)
+}
+
+const stageHeader = "TAB select  ctrl-s stage  ctrl-u unstage  ENTER finish  ESC cancel"
+
+func appendUniquePaths(changes []git.Change, change git.Change, paths []string, seen map[string]struct{}) []git.Change {
+	unique := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		unique = append(unique, path)
+	}
+	if len(unique) > 0 {
+		changes = append(changes, change)
+	}
+	return changes
+}
+
+func collectPaths(changes []git.Change, stage bool) []string {
+	paths := make([]string, 0, len(changes))
+	seen := make(map[string]struct{}, len(changes))
+	for _, change := range changes {
+		candidates := change.UnstagePaths()
+		if stage {
+			candidates = change.StagePaths()
+		}
+		for _, path := range candidates {
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func (r *Runner) stageActionFailure(stdout io.Writer, transform bool, err error) error {
+	if !transform {
+		return err
+	}
+	return writeStageHeader(stdout, err.Error())
+}
+
+func writeStageHeader(stdout io.Writer, message string) error {
+	header := stageHeader
+	if message != "" {
+		message = strings.NewReplacer("\r", " ", "\n", " ", "\x00", " ", "\t", " ", "+", " ").Replace(strings.TrimSpace(message))
+		header = "Stage failed: " + message + "  |  " + stageHeader
+	}
+	_, err := fmt.Fprintln(stdout, "change-header:"+header)
+	return err
 }
 
 func marshal(value any) (string, error) {

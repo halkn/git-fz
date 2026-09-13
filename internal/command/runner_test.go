@@ -85,7 +85,7 @@ func TestRunStageConfiguresMultiSelectActions(t *testing.T) {
 		if len(options.Bind) != 2 || !strings.Contains(options.Bind[0], "ctrl-s") || !strings.Contains(options.Bind[1], "ctrl-u") {
 			t.Fatalf("stage bindings = %#v", options.Bind)
 		}
-		if !strings.Contains(options.Bind[0], "{+1}") || !strings.Contains(options.Bind[0], "__stage-source") {
+		if !strings.Contains(options.Bind[0], "{+1}") || !strings.Contains(options.Bind[0], "__stage-source") || !strings.Contains(options.Bind[0], "transform") || !strings.Contains(options.Bind[0], "reload-sync") {
 			t.Fatalf("stage binding = %#v", options.Bind)
 		}
 		return []string{items[0].Payload}, nil
@@ -155,6 +155,142 @@ func TestRunPreviewShowsCommitDiff(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "first commit") {
 		t.Fatalf("preview = %q", stdout.String())
+	}
+}
+
+func TestRunStageActionUnstagesRenameWithoutChangingWorktree(t *testing.T) {
+	dir := newCommandRepository(t)
+	oldPath := "old 日本.txt"
+	newPath := "new 日本.txt"
+	writeCommandFile(t, dir, oldPath, "original\n")
+	runCommandGit(t, dir, "add", "--", oldPath)
+	runCommandGit(t, dir, "commit", "-m", "rename source")
+	runCommandGit(t, dir, "mv", oldPath, newPath)
+	client := git.NewInDir(dir, "")
+	changes, err := client.ListChanges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || !changes[0].IsRename() {
+		t.Fatalf("rename changes = %#v", changes)
+	}
+	payload, err := marshal(changes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(client, &fakePicker{}, "/tmp/git-fz")
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"__stage-action", "unstage", fzf.EncodePayload(payload)}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if cached := strings.TrimSpace(string(runCommandGit(t, dir, "diff", "--cached", "--name-status"))); cached != "" {
+		t.Fatalf("cached rename after unstage = %q", cached)
+	}
+	if _, err := os.Stat(filepath.Join(dir, newPath)); err != nil {
+		t.Fatalf("destination missing after unstage: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, oldPath)); !os.IsNotExist(err) {
+		t.Fatalf("source exists after unstage: %v", err)
+	}
+}
+
+func TestRunRenamePreviewAndStageUseDestination(t *testing.T) {
+	dir := newCommandRepository(t)
+	oldPath := "old 日本.txt"
+	newPath := "new 日本.txt"
+	writeCommandFile(t, dir, oldPath, "original\n")
+	runCommandGit(t, dir, "add", "--", oldPath)
+	runCommandGit(t, dir, "commit", "-m", "rename source")
+	runCommandGit(t, dir, "mv", oldPath, newPath)
+	writeCommandFile(t, dir, newPath, "original\nupdated\n")
+	unrelatedPath := "unrelated.txt"
+	writeCommandFile(t, dir, unrelatedPath, "unrelated\n")
+	runCommandGit(t, dir, "add", "--", unrelatedPath)
+
+	client := git.NewInDir(dir, "")
+	changes, err := client.ListChanges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rename git.Change
+	for _, change := range changes {
+		if change.IsRename() {
+			rename = change
+			break
+		}
+	}
+	if !rename.IsRename() || rename.Path != newPath || rename.OriginalPath != oldPath {
+		t.Fatalf("rename change = %#v", rename)
+	}
+
+	payload, err := marshal(rename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(client, &fakePicker{}, "/tmp/git-fz")
+	var preview bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"__preview", "change", fzf.EncodePayload(payload)}, &preview, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(preview.String(), "updated") {
+		t.Fatalf("rename preview = %q", preview.String())
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"__stage-action", "stage", fzf.EncodePayload(payload)}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cached := string(runCommandGit(t, dir, "diff", "--cached", "--name-status", "-z"))
+	if !strings.Contains(cached, newPath) || !strings.Contains(cached, unrelatedPath) {
+		t.Fatalf("cached paths after rename stage = %q", cached)
+	}
+	stdout.Reset()
+	if err := runner.Run(context.Background(), []string{"__stage-action", "unstage", fzf.EncodePayload(payload)}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cached = string(runCommandGit(t, dir, "diff", "--cached", "--name-only", "-z"))
+	if strings.Contains(cached, oldPath) || strings.Contains(cached, newPath) || !strings.Contains(cached, unrelatedPath) {
+		t.Fatalf("cached paths after rename unstage = %q", cached)
+	}
+}
+
+func TestRunStageActionTransformReportsFailureAndAllowsRetry(t *testing.T) {
+	dir := newCommandRepository(t)
+	path := "locked file.txt"
+	writeCommandFile(t, dir, path, "untracked\n")
+	change := git.Change{Path: path, IndexStatus: '?', WorktreeStatus: '?'}
+	payload, err := marshal(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := fzf.EncodePayload(payload)
+	lockPath := filepath.Join(dir, ".git", "index.lock")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(git.NewInDir(dir, ""), &fakePicker{}, "/tmp/git-fz")
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"__stage-action", "--transform", "stage", token}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "change-header:Stage failed:") {
+		t.Fatalf("failure feedback = %q", stdout.String())
+	}
+	if status := string(runCommandGit(t, dir, "status", "--porcelain=v1", "--", path)); !strings.HasPrefix(status, "?? ") {
+		t.Fatalf("status after failed stage = %q", status)
+	}
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runner.Run(context.Background(), []string{"__stage-action", "--transform", "stage", token}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "change-header:"+stageHeader+"\n" {
+		t.Fatalf("success feedback = %q", stdout.String())
+	}
+	if status := string(runCommandGit(t, dir, "status", "--porcelain=v1", "--", path)); !strings.HasPrefix(status, "A  ") {
+		t.Fatalf("status after retry = %q", status)
 	}
 }
 

@@ -8,11 +8,29 @@ import (
 
 type Change struct {
 	Path           string
+	OriginalPath   string
 	IndexStatus    byte
 	WorktreeStatus byte
 }
 
 func (c Change) Status() string { return string([]byte{c.IndexStatus, c.WorktreeStatus}) }
+
+func (c Change) IsRename() bool {
+	return c.OriginalPath != "" && (c.IndexStatus == 'R' || c.WorktreeStatus == 'R')
+}
+
+func (c Change) IsCopy() bool {
+	return c.OriginalPath != "" && (c.IndexStatus == 'C' || c.WorktreeStatus == 'C')
+}
+
+func (c Change) StagePaths() []string { return []string{c.Path} }
+
+func (c Change) UnstagePaths() []string {
+	if c.IsRename() {
+		return []string{c.OriginalPath, c.Path}
+	}
+	return []string{c.Path}
+}
 
 func (c Change) CanStage() bool {
 	return c.WorktreeStatus != ' ' && c.WorktreeStatus != '!'
@@ -58,10 +76,10 @@ func parseChanges(data []byte) ([]Change, error) {
 		}
 		if record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C' {
 			if i+1 >= len(records) {
-				return nil, fmt.Errorf("parse git status output: rename record has no destination")
+				return nil, fmt.Errorf("parse git status output: rename record has no source")
 			}
 			i++
-			change.Path = string(records[i])
+			change.OriginalPath = string(records[i])
 		}
 		changes = append(changes, change)
 	}
@@ -69,16 +87,16 @@ func parseChanges(data []byte) ([]Change, error) {
 }
 
 func (c *Client) Add(ctx context.Context, paths ...string) (Result, error) {
-	args := append([]string{"add", "--"}, paths...)
+	args := append([]string{"--literal-pathspecs", "add", "--"}, paths...)
 	return c.Execute(ctx, args...)
 }
 
 func (c *Client) Unstage(ctx context.Context, paths ...string) (Result, error) {
 	if _, err := c.Execute(ctx, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
-		args := append([]string{"rm", "--cached", "--"}, paths...)
+		args := append([]string{"--literal-pathspecs", "rm", "--cached", "--"}, paths...)
 		return c.Execute(ctx, args...)
 	}
-	args := append([]string{"restore", "--staged", "--"}, paths...)
+	args := append([]string{"--literal-pathspecs", "restore", "--staged", "--"}, paths...)
 	return c.Execute(ctx, args...)
 }
 
@@ -87,11 +105,16 @@ func (c *Client) StatusShort(ctx context.Context) (Result, error) {
 }
 
 func (c *Client) Diff(ctx context.Context, path string, staged bool) (Result, error) {
-	args := []string{"diff", "--color=always", "--no-ext-diff"}
+	return c.DiffPaths(ctx, []string{path}, staged)
+}
+
+func (c *Client) DiffPaths(ctx context.Context, paths []string, staged bool) (Result, error) {
+	args := []string{"--literal-pathspecs", "diff", "--color=always", "--no-ext-diff"}
 	if staged {
 		args = append(args, "--cached")
 	}
-	args = append(args, "--", path)
+	args = append(args, "--")
+	args = append(args, paths...)
 	return c.Execute(ctx, args...)
 }
 

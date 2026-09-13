@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +77,51 @@ func TestSelectReportsMissingExecutable(t *testing.T) {
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Select() error = %v, want ErrUnavailable", err)
 	}
+}
+
+func TestBuildArgsHidesPayloadFromPresentationAndSearch(t *testing.T) {
+	args := strings.Join(buildArgs(Options{}), " ")
+	for _, want := range []string{"--with-nth=2..", "--accept-nth=1"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("buildArgs() = %q, missing %q", args, want)
+		}
+	}
+}
+
+func TestSelectFiltersOnDisplayFieldOnly(t *testing.T) {
+	realFZF, err := exec.LookPath("fzf")
+	if err != nil {
+		t.Skip("fzf is not installed")
+	}
+	t.Setenv("FZF_DEFAULT_OPTS", "")
+	t.Setenv("FZF_DEFAULT_OPTS_FILE", "")
+	item := Item{Payload: "payload-only-token", Display: "visible-name"}
+
+	payloadOnlyRunner := newFilteredRunner(t, realFZF, "cGF5bG9hZA")
+	if _, err := payloadOnlyRunner.Select(context.Background(), []Item{item}, Options{}); err != ErrCancelled {
+		t.Fatalf("payload-only query error = %v, want ErrCancelled", err)
+	}
+
+	displayRunner := newFilteredRunner(t, realFZF, "visible-name")
+	selected, err := displayRunner.Select(context.Background(), []Item{item}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0] != item.Payload {
+		t.Fatalf("display query selection = %#v, want %#v", selected, []string{item.Payload})
+	}
+}
+
+func newFilteredRunner(t *testing.T, realFZF, query string) *Runner {
+	t.Helper()
+	fake := filepath.Join(t.TempDir(), "fzf")
+	script := "#!/bin/sh\nexec " + ShellQuote(realFZF) + " \"$@\" --filter=" + ShellQuote(query) + "\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := New(fake)
+	runner.Stderr = io.Discard
+	return runner
 }
 
 func TestShellQuote(t *testing.T) {

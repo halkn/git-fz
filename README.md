@@ -44,8 +44,9 @@ standard output when accepted. This makes it useful in shell pipelines.
 `stage` lists tracked and untracked changes. Select rows with `TAB`, use
 `Ctrl-S` to stage selected rows, and `Ctrl-U` to unstage selected rows. The
 picker reloads the current Git status after each operation; `ENTER` finishes
-and prints the short status. Discard, commit, and hunk or line staging are not
-part of the MVP.
+and prints the short status. If an operation fails, its Git error stays in the
+picker header so it can be corrected and retried. Discard, commit, and hunk or
+line staging are not part of the MVP.
 
 The selector passes opaque payloads to fzf and decodes them inside the
 binary, so paths and branch names containing spaces, tabs, newlines, or

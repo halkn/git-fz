@@ -89,29 +89,7 @@ func (r *Runner) Select(ctx context.Context, items []Item, options Options) ([]s
 	if err := WriteItems(&input, items); err != nil {
 		return nil, err
 	}
-	args := []string{
-		"--read0",
-		"--print0",
-		"--delimiter=\t",
-		"--accept-nth=1",
-		"--layout=reverse",
-		"--height=80%",
-	}
-	if options.Prompt != "" {
-		args = append(args, "--prompt="+options.Prompt)
-	}
-	if options.Header != "" {
-		args = append(args, "--header="+options.Header)
-	}
-	if options.Preview != "" {
-		args = append(args, "--preview="+options.Preview)
-	}
-	if options.Multi {
-		args = append(args, "--multi")
-	}
-	for _, bind := range options.Bind {
-		args = append(args, "--bind="+bind)
-	}
+	args := buildArgs(options)
 
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Stdin = &input
@@ -145,6 +123,34 @@ func (r *Runner) Select(ctx context.Context, items []Item, options Options) ([]s
 		return nil, ErrCancelled
 	}
 	return selected, nil
+}
+
+func buildArgs(options Options) []string {
+	args := []string{
+		"--read0",
+		"--print0",
+		"--delimiter=\t",
+		"--with-nth=2..",
+		"--accept-nth=1",
+		"--layout=reverse",
+		"--height=80%",
+	}
+	if options.Prompt != "" {
+		args = append(args, "--prompt="+options.Prompt)
+	}
+	if options.Header != "" {
+		args = append(args, "--header="+options.Header)
+	}
+	if options.Preview != "" {
+		args = append(args, "--preview="+options.Preview)
+	}
+	if options.Multi {
+		args = append(args, "--multi")
+	}
+	for _, bind := range options.Bind {
+		args = append(args, "--bind="+bind)
+	}
+	return args
 }
 
 func ShellQuote(value string) string {
