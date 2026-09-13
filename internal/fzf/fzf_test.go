@@ -71,6 +71,21 @@ func TestSelectNormalizesCancel(t *testing.T) {
 	}
 }
 
+func TestSelectDistinguishesNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fzf")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := New(fake)
+	runner.Stderr = io.Discard
+	_, err := runner.Select(context.Background(), []Item{{Payload: "payload", Display: "display"}}, Options{})
+	if err != ErrNoMatch {
+		t.Fatalf("Select() error = %v, want ErrNoMatch", err)
+	}
+}
+
 func TestSelectReportsMissingExecutable(t *testing.T) {
 	runner := New("/definitely/missing/fzf")
 	_, err := runner.Select(context.Background(), []Item{{Payload: "payload", Display: "display"}}, Options{})
@@ -98,8 +113,8 @@ func TestSelectFiltersOnDisplayFieldOnly(t *testing.T) {
 	item := Item{Payload: "payload-only-token", Display: "visible-name"}
 
 	payloadOnlyRunner := newFilteredRunner(t, realFZF, "cGF5bG9hZA")
-	if _, err := payloadOnlyRunner.Select(context.Background(), []Item{item}, Options{}); err != ErrCancelled {
-		t.Fatalf("payload-only query error = %v, want ErrCancelled", err)
+	if _, err := payloadOnlyRunner.Select(context.Background(), []Item{item}, Options{}); err != ErrNoMatch {
+		t.Fatalf("payload-only query error = %v, want ErrNoMatch", err)
 	}
 
 	displayRunner := newFilteredRunner(t, realFZF, "visible-name")

@@ -103,6 +103,23 @@ func TestRunStageConfiguresMultiSelectActions(t *testing.T) {
 	}
 }
 
+func TestRunStageTreatsNoMatchAsFinish(t *testing.T) {
+	dir := newCommandRepository(t)
+	path := "untracked.txt"
+	writeCommandFile(t, dir, path, "untracked\n")
+	picker := &fakePicker{selectFn: func([]fzf.Item, fzf.Options) ([]string, error) {
+		return nil, fzf.ErrNoMatch
+	}}
+	runner := NewRunner(git.NewInDir(dir, ""), picker, "/tmp/git-fz")
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"stage"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "?? "+path) {
+		t.Fatalf("status output = %q", stdout.String())
+	}
+}
+
 func TestRunNormalizesPickerCancellationAtCallerBoundary(t *testing.T) {
 	dir := newCommandRepository(t)
 	picker := &fakePicker{selectFn: func([]fzf.Item, fzf.Options) ([]string, error) {
@@ -155,6 +172,37 @@ func TestRunPreviewShowsCommitDiff(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "first commit") {
 		t.Fatalf("preview = %q", stdout.String())
+	}
+}
+
+func TestRunChangePreviewShowsDiffErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change git.Change
+	}{
+		{name: "tracked", change: git.Change{Path: "tracked.txt", WorktreeStatus: 'M'}},
+		{name: "untracked", change: git.Change{Path: "untracked", IndexStatus: '?', WorktreeStatus: '?'}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fakeGit := filepath.Join(dir, "git")
+			script := "#!/bin/sh\nif [ \"$1\" = rev-parse ]; then printf '%s\\n' \"$PWD\"; exit 0; fi\nprintf 'preview unavailable\\n' >&2\nexit 2\n"
+			if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			payload, err := marshal(test.change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := NewRunner(git.NewInDir(dir, fakeGit), &fakePicker{}, "/tmp/git-fz")
+			var stdout bytes.Buffer
+			if err := runner.Run(context.Background(), []string{"__preview", "change", fzf.EncodePayload(payload)}, &stdout, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(stdout.String(), "preview unavailable") {
+				t.Fatalf("preview error = %q", stdout.String())
+			}
+		})
 	}
 }
 
@@ -291,6 +339,30 @@ func TestRunStageActionTransformReportsFailureAndAllowsRetry(t *testing.T) {
 	}
 	if status := string(runCommandGit(t, dir, "status", "--porcelain=v1", "--", path)); !strings.HasPrefix(status, "A  ") {
 		t.Fatalf("status after retry = %q", status)
+	}
+}
+
+func TestRunStageActionTransformHandlesNoSelectionAndNoOp(t *testing.T) {
+	runner := NewRunner(git.NewInDir(t.TempDir(), ""), &fakePicker{}, "/tmp/git-fz")
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"__stage-action", "--transform", "stage"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout.String(), "usage:") || !strings.Contains(stdout.String(), "No changes selected") {
+		t.Fatalf("no-selection feedback = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	change := git.Change{Path: "untracked.txt", IndexStatus: '?', WorktreeStatus: '?'}
+	payload, err := marshal(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), []string{"__stage-action", "--transform", "unstage", fzf.EncodePayload(payload)}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "No applicable changes for unstage") || stdout.String() == "change-header:"+stageHeader+"\n" {
+		t.Fatalf("no-op feedback = %q", stdout.String())
 	}
 }
 

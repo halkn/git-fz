@@ -1,7 +1,6 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -17,10 +16,6 @@ type Branch struct {
 func (b Branch) IsRemote() bool { return b.Remote != "" }
 
 func (c *Client) ListBranches(ctx context.Context) ([]Branch, error) {
-	if err := c.EnsureRepository(ctx); err != nil {
-		return nil, err
-	}
-
 	result, err := c.Execute(ctx,
 		"for-each-ref",
 		"--sort=-committerdate",
@@ -36,21 +31,17 @@ func (c *Client) ListBranches(ctx context.Context) ([]Branch, error) {
 }
 
 func parseBranches(data []byte) ([]Branch, error) {
-	data = bytes.TrimSuffix(data, []byte{'\n'})
-	fields := bytes.Split(data, []byte{0})
-	if len(fields) > 0 && len(fields[len(fields)-1]) == 0 {
-		fields = fields[:len(fields)-1]
-	}
-	if len(fields)%4 != 0 {
-		return nil, fmt.Errorf("parse git branch output: expected groups of 4 fields, got %d", len(fields))
+	groups, err := splitNULGroups(data, 4)
+	if err != nil {
+		return nil, fmt.Errorf("parse git branch output: %w", err)
 	}
 
-	branches := make([]Branch, 0, len(fields)/4)
-	for i := 0; i < len(fields); i += 4 {
-		rawRef := strings.TrimPrefix(string(fields[i]), "\n")
-		shortRef := string(fields[i+1])
-		isCurrent := string(fields[i+2]) == "*"
-		symref := string(fields[i+3])
+	branches := make([]Branch, 0, len(groups))
+	for _, fields := range groups {
+		rawRef := fields[0]
+		shortRef := fields[1]
+		isCurrent := fields[2] == "*"
+		symref := fields[3]
 		if symref != "" {
 			continue
 		}

@@ -38,7 +38,8 @@ git fz stage
 `git switch --track`, so the local branch name and tracking configuration use
 Git's normal rules.
 
-`log` previews the selected commit with `git show` and prints its full SHA to
+`log` searches up to the latest 1,000 commits across local and remote refs,
+previews the selected commit with `git show`, and prints its full SHA to
 standard output when accepted. This makes it useful in shell pipelines.
 
 `stage` lists tracked and untracked changes. Select rows with `TAB`, use

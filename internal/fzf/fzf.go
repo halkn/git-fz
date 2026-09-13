@@ -14,6 +14,7 @@ import (
 
 var (
 	ErrCancelled   = errors.New("fzf selection cancelled")
+	ErrNoMatch     = errors.New("fzf selection has no matches")
 	ErrUnavailable = errors.New("fzf executable not found")
 )
 
@@ -101,8 +102,13 @@ func (r *Runner) Select(ctx context.Context, items []Item, options Options) ([]s
 	cmd.Stdout = &output
 	if err := cmd.Run(); err != nil {
 		var exitError *exec.ExitError
-		if errors.As(err, &exitError) && (exitError.ExitCode() == 1 || exitError.ExitCode() == 130) {
-			return nil, ErrCancelled
+		if errors.As(err, &exitError) {
+			switch exitError.ExitCode() {
+			case 1:
+				return nil, ErrNoMatch
+			case 130:
+				return nil, ErrCancelled
+			}
 		}
 		return nil, fmt.Errorf("run fzf: %w", err)
 	}

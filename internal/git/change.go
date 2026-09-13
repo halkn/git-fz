@@ -41,9 +41,6 @@ func (c Change) CanUnstage() bool {
 }
 
 func (c *Client) ListChanges(ctx context.Context) ([]Change, error) {
-	if err := c.EnsureRepository(ctx); err != nil {
-		return nil, err
-	}
 	result, err := c.Execute(ctx, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil, err
@@ -92,7 +89,11 @@ func (c *Client) Add(ctx context.Context, paths ...string) (Result, error) {
 }
 
 func (c *Client) Unstage(ctx context.Context, paths ...string) (Result, error) {
-	if _, err := c.Execute(ctx, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
+	state, err := c.headState(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if state == headStateUnborn {
 		args := append([]string{"--literal-pathspecs", "rm", "--cached", "--"}, paths...)
 		return c.Execute(ctx, args...)
 	}

@@ -9,11 +9,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type Client struct {
 	Path string
 	Dir  string
+
+	rootMu sync.Mutex
+	root   string
 }
 
 type Result struct {
@@ -36,6 +40,14 @@ func (e *CommandError) Error() string {
 }
 
 func (e *CommandError) Unwrap() error { return e.Err }
+
+func (e *CommandError) ExitCode() int {
+	var exitError *exec.ExitError
+	if errors.As(e.Err, &exitError) {
+		return exitError.ExitCode()
+	}
+	return -1
+}
 
 func New(path string) *Client { return &Client{Path: path} }
 
@@ -104,6 +116,12 @@ func (c *Client) EnsureRepository(ctx context.Context) error {
 }
 
 func (c *Client) repositoryRoot(ctx context.Context) (string, error) {
+	c.rootMu.Lock()
+	defer c.rootMu.Unlock()
+	if c.root != "" {
+		return c.root, nil
+	}
+
 	result, err := c.executeAt(ctx, c.Dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
@@ -112,6 +130,7 @@ func (c *Client) repositoryRoot(ctx context.Context) (string, error) {
 	if root == "" {
 		return "", errors.New("git rev-parse returned an empty repository root")
 	}
+	c.root = root
 	return root, nil
 }
 
@@ -129,4 +148,31 @@ func (c *Client) environment() ([]string, error) {
 		env[i] = key + "=" + filepath.Join(baseDir, value)
 	}
 	return env, nil
+}
+
+type headState uint8
+
+const (
+	headStateUnknown headState = iota
+	headStateWithCommit
+	headStateUnborn
+)
+
+func (c *Client) headState(ctx context.Context) (headState, error) {
+	_, headErr := c.Execute(ctx, "rev-parse", "--verify", "HEAD^{commit}")
+	if headErr == nil {
+		return headStateWithCommit, nil
+	}
+
+	if _, err := c.Execute(ctx, "symbolic-ref", "-q", "HEAD"); err != nil {
+		return headStateUnknown, fmt.Errorf("determine HEAD state: %w", headErr)
+	}
+	result, err := c.Execute(ctx, "rev-list", "--all", "--max-count=1")
+	if err != nil {
+		return headStateUnknown, fmt.Errorf("determine repository history: %w", err)
+	}
+	if len(bytes.TrimSpace(result.Stdout)) != 0 {
+		return headStateUnknown, headErr
+	}
+	return headStateUnborn, nil
 }

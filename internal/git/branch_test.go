@@ -117,6 +117,22 @@ func TestEmptyRepositoryHasNoBranchesOrCommits(t *testing.T) {
 	}
 }
 
+func TestListCommitsUsesAllRefsWhenHeadIsUnborn(t *testing.T) {
+	dir := newRepository(t)
+	writeFile(t, dir, "README.md", "first\n")
+	runGit(t, dir, "add", "--", "README.md")
+	runGit(t, dir, "commit", "-qm", "initial")
+	runGit(t, dir, "symbolic-ref", "HEAD", "refs/heads/gone")
+
+	commits, err := NewInDir(dir, "").ListCommits(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commits) != 1 || commits[0].Subject != "initial" {
+		t.Fatalf("commits = %#v", commits)
+	}
+}
+
 func newRepository(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

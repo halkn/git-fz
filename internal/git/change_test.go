@@ -234,6 +234,25 @@ func TestRepositoryOperationsResolveRelativeGitEnvironment(t *testing.T) {
 	}
 }
 
+func TestUnstageDoesNotRemoveIndexForBrokenHead(t *testing.T) {
+	dir := newRepository(t)
+	writeFile(t, dir, "README.md", "first\n")
+	runGit(t, dir, "add", "--", "README.md")
+	runGit(t, dir, "commit", "-qm", "initial")
+	writeFile(t, dir, "README.md", "changed\n")
+	runGit(t, dir, "add", "--", "README.md")
+	runGit(t, dir, "symbolic-ref", "HEAD", "refs/heads/gone")
+
+	client := NewInDir(dir, "")
+	if _, err := client.Unstage(context.Background(), "README.md"); err == nil {
+		t.Fatal("Unstage() succeeded with a broken HEAD")
+	}
+	cached := string(runGit(t, dir, "diff", "--cached", "--name-only"))
+	if !strings.Contains(cached, "README.md") {
+		t.Fatalf("cached paths after broken HEAD unstage = %q", cached)
+	}
+}
+
 func TestChangedPathCanBeStagedAndUnstaged(t *testing.T) {
 	dir := newRepository(t)
 	writeFile(t, dir, "README.md", "first\nchanged\n")
