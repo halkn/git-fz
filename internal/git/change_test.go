@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,6 +177,60 @@ func TestRepositoryOperationsUseRootFromChildDirectory(t *testing.T) {
 	}
 	if status := string(runGit(t, dir, "status", "--porcelain=v1")); !strings.HasPrefix(status, "?? sub/file.txt") {
 		t.Fatalf("status after child unstage = %q", status)
+	}
+}
+
+func TestRepositoryRootPreservesTrailingWhitespace(t *testing.T) {
+	for _, suffix := range []string{" ", "\n"} {
+		t.Run(fmt.Sprintf("suffix-%q", suffix), func(t *testing.T) {
+			parent := t.TempDir()
+			dir := filepath.Join(parent, "repo"+suffix)
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, dir, "init", "-q", "-b", "main")
+			writeFile(t, dir, "file.txt", "content\n")
+
+			client := NewInDir(dir, "")
+			changes, err := client.ListChanges(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(changes) != 1 || changes[0].Path != "file.txt" {
+				t.Fatalf("changes = %#v", changes)
+			}
+		})
+	}
+}
+
+func TestRepositoryOperationsResolveRelativeGitEnvironment(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "repo")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "init", "-q", "-b", "main")
+	writeFile(t, dir, "file.txt", "content\n")
+
+	t.Setenv("GIT_DIR", filepath.Join("repo", ".git"))
+	t.Setenv("GIT_WORK_TREE", "repo")
+	client := NewInDir(parent, "")
+	changes, err := client.ListChanges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].Path != "file.txt" {
+		t.Fatalf("changes = %#v", changes)
+	}
+	if _, err := client.Add(context.Background(), "file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	changes, err = client.ListChanges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].Status() != "A " {
+		t.Fatalf("staged changes = %#v", changes)
 	}
 }
 

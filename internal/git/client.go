@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -71,7 +73,12 @@ func (c *Client) executeAt(ctx context.Context, dir string, args ...string) (Res
 		return Result{}, err
 	}
 
+	env, err := c.environment()
+	if err != nil {
+		return Result{}, err
+	}
 	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = env
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -101,9 +108,25 @@ func (c *Client) repositoryRoot(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root := strings.TrimSpace(string(result.Stdout))
+	root := strings.TrimSuffix(string(result.Stdout), "\n")
 	if root == "" {
 		return "", errors.New("git rev-parse returned an empty repository root")
 	}
 	return root, nil
+}
+
+func (c *Client) environment() ([]string, error) {
+	baseDir, err := filepath.Abs(c.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve git working directory: %w", err)
+	}
+	env := os.Environ()
+	for i, variable := range env {
+		key, value, ok := strings.Cut(variable, "=")
+		if !ok || (key != "GIT_DIR" && key != "GIT_WORK_TREE") || value == "" || filepath.IsAbs(value) {
+			continue
+		}
+		env[i] = key + "=" + filepath.Join(baseDir, value)
+	}
+	return env, nil
 }
