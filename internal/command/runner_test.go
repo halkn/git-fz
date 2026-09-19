@@ -50,6 +50,31 @@ func TestRunLogPrintsSelectedSHA(t *testing.T) {
 	}
 }
 
+func TestRunVersionPrintsInjectedVersion(t *testing.T) {
+	previous := Version
+	t.Cleanup(func() { Version = previous })
+	Version = "1.2.3"
+	runner := NewRunner(git.New(""), &fakePicker{}, "/tmp/git-fz")
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"--version"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "git-fz 1.2.3\n" {
+		t.Fatalf("stdout = %q, want %q", got, "git-fz 1.2.3\n")
+	}
+}
+
+func TestRunHelpListsVersionOption(t *testing.T) {
+	runner := NewRunner(git.New(""), &fakePicker{}, "/tmp/git-fz")
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(context.Background(), []string{"--help"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "--version") {
+		t.Fatalf("usage = %q, want it to mention --version", stdout.String())
+	}
+}
+
 func TestRunSwitchUsesRemoteTrackingBranch(t *testing.T) {
 	dir := newCommandRepository(t)
 	runCommandGit(t, dir, "remote", "add", "origin", "https://example.invalid/origin.git")

@@ -13,6 +13,9 @@ import (
 	"github.com/halkn/git-fz/internal/git"
 )
 
+// Version is set at release build time with -ldflags -X.
+var Version = "dev"
+
 type Picker interface {
 	Select(context.Context, []fzf.Item, fzf.Options) ([]string, error)
 }
@@ -40,6 +43,9 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 	}
 
 	switch args[0] {
+	case "--version":
+		_, err := fmt.Fprintf(stdout, "git-fz %s\n", Version)
+		return err
 	case "switch":
 		return r.runSwitch(ctx, stdout, stderr)
 	case "log":
@@ -64,6 +70,9 @@ Commands:
   switch  Select a local or remote branch and switch to it
   log     Select a commit and print its SHA
   stage   Select changed files to stage or unstage
+
+Options:
+  --version  Print the git-fz version
 
 Requirements: git and fzf must be available on PATH.
 `
