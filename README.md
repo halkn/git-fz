@@ -11,6 +11,19 @@ operation.
 
 ## Installation
 
+Each tagged release ships prebuilt archives for `aarch64-apple-darwin` and
+`x86_64-unknown-linux-gnu`, together with `SHA256SUMS`. Download one from the
+[releases page](https://github.com/halkn/git-fz/releases), extract it, and put
+the `git-fz` binary on `PATH`.
+
+With [mise](https://mise.jdx.dev):
+
+```console
+mise use -g github:halkn/git-fz@latest
+```
+
+With Go:
+
 ```console
 go install github.com/halkn/git-fz/cmd/git-fz@latest
 ```
@@ -32,6 +45,9 @@ git fz switch
 git fz log
 git fz stage
 ```
+
+`git fz --version` prints the version. Binaries built outside a release report
+`dev`.
 
 `switch` lists local and remote branches, previews recent commits, and runs
 `git switch` for the selected branch. Remote branches are passed to
@@ -56,6 +72,11 @@ non-ASCII characters do not need shell quoting or display-string parsing.
 ## Development
 
 ```console
+gofmt -l .
+go vet ./...
 go test ./...
 go build ./cmd/git-fz
 ```
+
+CI runs the same checks on every push and pull request. Pushing a `v*` tag
+builds the release archives and publishes them.
