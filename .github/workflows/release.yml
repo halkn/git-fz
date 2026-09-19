@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: [v*]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go vet ./...
+      - run: go test ./...
+
+  build:
+    # A tag can point at a commit that CI never ran on, so the archives are built
+    # only after the same checks pass here.
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            target: aarch64-apple-darwin
+          - goos: linux
+            goarch: amd64
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build archive
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dir="git-fz-${version}-${{ matrix.target }}"
+          mkdir -p "${dir}"
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X github.com/halkn/git-fz/internal/command.Version=${version}" \
+            -o "${dir}/git-fz" \
+            ./cmd/git-fz
+          cp README.md LICENSE "${dir}/"
+          tar -czf "${dir}.tar.gz" "${dir}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: git-fz-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job, so gh cannot infer the repository from a remote.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          (cd release && sha256sum git-fz-*.tar.gz > SHA256SUMS)
+          prerelease=()
+          case "${GITHUB_REF_NAME}" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/*.tar.gz release/SHA256SUMS --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/*.tar.gz release/SHA256SUMS \
+              --generate-notes "${prerelease[@]}"
+          fi

@@ -7,11 +7,28 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/halkn/git-fz/internal/fzf"
 	"github.com/halkn/git-fz/internal/git"
 )
+
+// Version is set at release build time with -ldflags -X.
+var Version = "dev"
+
+// version falls back to the module version so that `go install`-built binaries,
+// which carry no ldflags, still report something usable.
+func version() string {
+	if Version != "dev" {
+		return Version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return Version
+	}
+	return info.Main.Version
+}
 
 type Picker interface {
 	Select(context.Context, []fzf.Item, fzf.Options) ([]string, error)
@@ -40,6 +57,9 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 	}
 
 	switch args[0] {
+	case "--version":
+		_, err := fmt.Fprintf(stdout, "git-fz %s\n", version())
+		return err
 	case "switch":
 		return r.runSwitch(ctx, stdout, stderr)
 	case "log":
@@ -64,6 +84,9 @@ Commands:
   switch  Select a local or remote branch and switch to it
   log     Select a commit and print its SHA
   stage   Select changed files to stage or unstage
+
+Options:
+  --version  Print the git-fz version
 
 Requirements: git and fzf must be available on PATH.
 `
