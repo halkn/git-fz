@@ -169,13 +169,13 @@ func TestRepositoryOperationsUseRootFromChildDirectory(t *testing.T) {
 	if _, err := client.Add(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
-	if status := string(runGit(t, dir, "status", "--porcelain=v1")); !strings.HasPrefix(status, "A  sub/file.txt") {
+	if status := string(runGit(t, dir, "status", "--porcelain=v1", "--untracked-files=all")); !strings.HasPrefix(status, "A  sub/file.txt") {
 		t.Fatalf("status after child add = %q", status)
 	}
 	if _, err := client.Unstage(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
-	if status := string(runGit(t, dir, "status", "--porcelain=v1")); !strings.HasPrefix(status, "?? sub/file.txt") {
+	if status := string(runGit(t, dir, "status", "--porcelain=v1", "--untracked-files=all")); !strings.HasPrefix(status, "?? sub/file.txt") {
 		t.Fatalf("status after child unstage = %q", status)
 	}
 }
