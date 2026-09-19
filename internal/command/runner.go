@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/halkn/git-fz/internal/fzf"
@@ -15,6 +16,19 @@ import (
 
 // Version is set at release build time with -ldflags -X.
 var Version = "dev"
+
+// version falls back to the module version so that `go install`-built binaries,
+// which carry no ldflags, still report something usable.
+func version() string {
+	if Version != "dev" {
+		return Version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return Version
+	}
+	return info.Main.Version
+}
 
 type Picker interface {
 	Select(context.Context, []fzf.Item, fzf.Options) ([]string, error)
@@ -44,7 +58,7 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 
 	switch args[0] {
 	case "--version":
-		_, err := fmt.Fprintf(stdout, "git-fz %s\n", Version)
+		_, err := fmt.Fprintf(stdout, "git-fz %s\n", version())
 		return err
 	case "switch":
 		return r.runSwitch(ctx, stdout, stderr)

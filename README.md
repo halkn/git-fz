@@ -46,8 +46,8 @@ git fz log
 git fz stage
 ```
 
-`git fz --version` prints the version. Binaries built outside a release report
-`dev`.
+`git fz --version` prints the release version for a downloaded archive, and the
+module or VCS-derived version that Go stamps into any other build.
 
 `switch` lists local and remote branches, previews recent commits, and runs
 `git switch` for the selected branch. Remote branches are passed to
